@@ -1,0 +1,94 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Chennai Traffic Forecast</title>
+<style>
+:root{--bg:#f4f5f2;--ink:#1d2227;--mute:#667078;--card:#fff;--line:#d9ddd8;--ok:#1b8a4b;--mid:#c98a0a;--bad:#c93a3a}
+@media(prefers-color-scheme:dark){:root{--bg:#14181b;--ink:#eceeea;--mute:#98a2a9;--card:#1d2226;--line:#2d3439;--ok:#3fbf75;--mid:#e2a62b;--bad:#ea6060}}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--ink);font:16px/1.5 system-ui,-apple-system,"Segoe UI",sans-serif;padding:16px;max-width:560px;margin-inline:auto}
+h1{font-size:1.5rem;margin:8px 0 2px}
+p,label{color:var(--mute);font-size:.9rem;margin:0}
+.row{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin:14px 0}
+.row .full{grid-column:1/-1}
+select,input{width:100%;padding:10px;margin-top:4px;border:1px solid var(--line);border-radius:8px;background:var(--card);color:var(--ink);font:inherit}
+select:focus-visible,input:focus-visible{outline:3px solid var(--mid);outline-offset:2px}
+.card{background:var(--card);border:1px solid var(--line);border-left-width:8px;border-radius:8px;padding:16px;margin:8px 0}
+.big{font-size:2rem;font-weight:800;line-height:1.2}
+.chart{display:flex;align-items:flex-end;gap:2px;height:110px;margin-top:12px;border-bottom:1px solid var(--line)}
+.bar{flex:1;background:var(--line);border-radius:2px 2px 0 0;min-height:2px}
+.axis{display:flex;justify-content:space-between;font-size:.75rem;color:var(--mute);margin-top:4px}
+details{margin-top:20px;color:var(--mute);font-size:.85rem}
+</style>
+</head>
+<body>
+<h1>Chennai Traffic Forecast</h1>
+<p>Pick a road, a day type and the time you will reach it.</p>
+
+<div class="row">
+  <div class="full"><label for="road">Road</label><select id="road"></select></div>
+  <div><label for="day">Day</label><select id="day"><option value="wd">Weekday</option><option value="we">Weekend</option></select></div>
+  <div><label for="hr">Reaching it at</label><select id="hr"></select></div>
+</div>
+
+<div id="out" class="card" role="status" aria-live="polite">Loading data...</div>
+<div id="chartbox"></div>
+
+<details><summary>Data source</summary>
+  <label for="repo" style="display:block;margin-top:8px">GitHub repository (user/name)</label>
+  <input id="repo" value="kannacodrex/chennai-traffic">
+</details>
+
+<script>
+const $=id=>document.getElementById(id);
+function store(k,v){try{if(v===undefined)return localStorage.getItem(k);localStorage.setItem(k,v)}catch(e){return null}}
+let rows=[];
+const fmt=h=>(h%12||12)+(h<12?" AM":" PM");
+for(let h=0;h<24;h++)$("hr").add(new Option(fmt(h),h));
+$("hr").value=new Date().getHours();
+$("repo").value=store("ctf_repo")||$("repo").value;
+
+async function load(){
+  store("ctf_repo",$("repo").value.trim());
+  const url="https://raw.githubusercontent.com/"+$("repo").value.trim()+"/main/data/readings.csv";
+  try{
+    const res=await fetch(url,{cache:"no-store"});
+    if(!res.ok)throw 0;
+    const lines=(await res.text()).trim().split("\n").slice(1);
+    rows=lines.map(l=>{const c=l.split(",");return{hour:+c[0].slice(11,13),we:c[1]==="Sat"||c[1]==="Sun",road:c[2],now:+c[5],free:+c[6],sp:+c[3],sf:+c[4]}}).filter(r=>r.free>0);
+  }catch(e){$("out").textContent="Could not load data. Check the repository name under Data source.";return}
+  const roads=[...new Set(rows.map(r=>r.road))],cur=$("road").value;
+  $("road").innerHTML="";roads.forEach(r=>$("road").add(new Option(r,r)));
+  if(roads.includes(cur))$("road").value=cur;
+  show();
+}
+
+function stats(road,we,hour){
+  const a=rows.filter(r=>r.road===road&&r.we===we&&r.hour===hour);
+  if(!a.length)return null;
+  const slow=a.reduce((s,r)=>s+Math.max(0,1-r.sp/r.sf),0)/a.length*100;
+  const extra=a.reduce((s,r)=>s+Math.max(0,r.now-r.free),0)/a.length/60;
+  return{slow:Math.round(slow),extra:Math.round(extra),n:a.length};
+}
+const lvl=s=>s<15?["var(--ok)","Usually smooth"]:s<40?["var(--mid)","Usually slow"]:["var(--bad)","Usually heavy"];
+
+function show(){
+  const road=$("road").value,we=$("day").value==="we",hour=+$("hr").value;
+  if(!road)return;
+  const s=stats(road,we,hour),out=$("out");
+  if(!s){out.style.borderLeftColor="var(--line)";out.innerHTML="<b>Not enough data yet</b><br><span style='color:var(--mute)'>No readings for "+fmt(hour)+" on "+(we?"weekends":"weekdays")+" so far. The collector adds more every 15 minutes.</span>"}
+  else{const [c,l]=lvl(s.slow);out.style.borderLeftColor=c;
+    out.innerHTML="<div class='big' style='color:"+c+"'>"+(s.extra?"+"+s.extra+" min":"No delay")+"</div><b>"+l+"</b> at "+fmt(hour)+", about "+s.slow+"% slower than clear roads.<br><span style='color:var(--mute);font-size:.85rem'>Based on "+s.n+" reading"+(s.n>1?"s":"")+(s.n<8?" (early estimate, will improve)":"")+".</span>"}
+  let bars="";
+  for(let h=0;h<24;h++){const t=stats(road,we,h),v=t?t.slow:0,c=t?lvl(t.slow)[0]:"var(--line)";
+    bars+="<div class='bar' title='"+fmt(h)+"' style='height:"+Math.max(2,Math.min(100,v*1.6))+"%;background:"+c+";opacity:"+(h===hour?1:.55)+"'></div>"}
+  $("chartbox").innerHTML="<div class='chart'>"+bars+"</div><div class='axis'><span>12 AM</span><span>6 AM</span><span>12 PM</span><span>6 PM</span><span>11 PM</span></div>";
+}
+["road","day","hr"].forEach(i=>$(i).onchange=show);
+$("repo").onchange=load;
+load();
+</script>
+</body>
+</html>
